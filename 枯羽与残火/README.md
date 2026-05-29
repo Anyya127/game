@@ -6,12 +6,12 @@
 
 ### 如果你已经安装了 Git
 
-Win+X → 终端，粘贴以下三行：
+Win+X → 终端(管理员)，粘贴以下三行（一行一行回车）：
 
 ```powershell
 git clone https://gitee.com/Anyya__127/game.git $env:USERPROFILE\枯羽与残火
 cd $env:USERPROFILE\枯羽与残火
-.\scripts\setup.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
 ```
 
 ### 如果你还没装 Git
