@@ -2,7 +2,7 @@
 #  枯羽与残火 — 一键启动脚本 (Visual Studio 版)
 #
 #  队友使用方法（以管理员身份打开 PowerShell，粘贴运行）:
-#    irm https://gitee.com/Anyya__127/game/raw/master/scripts/一键启动.ps1 | iex
+#    irm https://gitee.com/Anyya__127/game/raw/main/scripts/一键启动.ps1 | iex
 #
 #  脚本自动完成:
 #    检查winget → 安装Git → 拉代码 → 安装CMake
