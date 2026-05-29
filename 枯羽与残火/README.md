@@ -11,7 +11,7 @@ Win+X → 终端(管理员)，粘贴以下命令（一行一行回车）：
 ```powershell
 Invoke-WebRequest -Uri "https://gitee.com/Anyya__127/game/repository/archive/main.zip" -OutFile "$env:TEMP\game.zip"
 Expand-Archive "$env:TEMP\game.zip" -DestinationPath "$env:USERPROFILE" -Force
-cd $env:USERPROFILE\枯羽与残火
+cd $env:USERPROFILE\game-main
 powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
 ```
 
