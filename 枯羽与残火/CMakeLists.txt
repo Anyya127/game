@@ -54,8 +54,12 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/vendor/raylib/src/external/glfw/include
 )
 
-# 链接 raylib
-target_link_libraries(${PROJECT_NAME} PRIVATE raylib m pthread dl)
+# 链接 raylib + 系统库（按平台区分）
+if(WIN32)
+    target_link_libraries(${PROJECT_NAME} PRIVATE raylib)
+else()
+    target_link_libraries(${PROJECT_NAME} PRIVATE raylib m pthread dl)
+endif()
 
 # ==================== 复制资源到构建目录 ====================
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
@@ -68,6 +72,8 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 # ==================== 编译选项 ====================
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -Wno-unused-parameter)
+elseif(MSVC)
+    target_compile_options(${PROJECT_NAME} PRIVATE /W4 /wd4996)
 endif()
 
 if(WIN32)

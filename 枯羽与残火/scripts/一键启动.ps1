@@ -1,212 +1,287 @@
 # =============================================================
-#  枯羽与残火 — Windows 一键拉取/安装/编译/启动
-#  使用方法：右键 → 使用 PowerShell 运行  (需要管理员权限)
-#  或者：以管理员身份打开 PowerShell，cd 到项目根目录，运行 ./scripts/一键启动.ps1
+#  枯羽与残火 — 一键启动脚本 (Visual Studio 版)
+#
+#  队友使用方法（以管理员身份打开 PowerShell，粘贴运行）:
+#    irm https://gitee.com/Anyya__127/game/raw/master/scripts/一键启动.ps1 | iex
+#
+#  脚本自动完成:
+#    检查winget → 安装Git → 拉代码 → 安装CMake
+#    → 检测Visual Studio → MSVC编译 → 启动游戏
+#
+#  已安装的环境会自动跳过，不会重复安装
+#  因为队友全是 VS 开发，所以直接用 VS 自带的 MSVC 编译器，不用 MinGW
 # =============================================================
-param(
-    [string]$RepoUrl = "",    # 如果要自动拉代码，填 Git 仓库地址
-    [switch]$SkipClone = $false
-)
 
 $ErrorActionPreference = "Stop"
-$ProjectRoot = Split-Path -Parent $PSScriptRoot
+
+$RepoUrl    = "https://gitee.com/Anyya__127/game.git"
+$ProjectDir = "$env:USERPROFILE\枯羽与残火"
 
 # ---- 检查管理员权限 ----
 if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
-    Write-Host "[错误] 请以管理员身份运行此脚本" -ForegroundColor Red
-    Write-Host "       方法1: 右键此文件 → 使用 PowerShell 运行" -ForegroundColor Yellow
-    Write-Host "       方法2: Win+X → 终端(管理员) → cd 到项目目录 → .\scripts\一键启动.ps1" -ForegroundColor Yellow
-    pause
-    exit 1
+    Write-Host "[错误] 请以管理员身份运行 PowerShell 再粘贴命令" -ForegroundColor Red
+    Write-Host "       快捷方式: Win+X -> 终端(管理员)" -ForegroundColor Yellow
+    return
 }
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  枯羽与残火 — 一键启动脚本" -ForegroundColor Cyan
+Write-Host "  枯羽与残火 — 一键启动 (VS版)" -ForegroundColor Cyan
+Write-Host "  仓库: $RepoUrl" -ForegroundColor DarkGray
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 
-# =============================================================
-# 步骤0: 克隆仓库（如果提供了 RepoUrl）
-# =============================================================
-if ($RepoUrl -and -not $SkipClone) {
-    Write-Host "[0/5] 拉取代码..." -ForegroundColor Green
-
-    $git = Get-Command git -ErrorAction SilentlyContinue
-    if (-not $git) {
-        Write-Host "       Git 未安装，正在安装..." -ForegroundColor Yellow
-        winget install Git.Git --accept-package-agreements --silent
-        Write-Host "       Git 安装完成，请重新打开终端后重试" -ForegroundColor Yellow
-        pause
-        exit 0
-    }
-
-    $cloneDir = Join-Path $env:USERPROFILE "枯羽与残火"
-    if (Test-Path $cloneDir) {
-        Write-Host "       目录已存在，跳过克隆: $cloneDir"
-        $ProjectRoot = $cloneDir
-    } else {
-        git clone $RepoUrl $cloneDir
-        $ProjectRoot = $cloneDir
-        Write-Host "       代码已拉取到: $cloneDir"
-    }
+# ---- 辅助函数：刷新 PATH ----
+function Refresh-Path {
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
+                [System.Environment]::GetEnvironmentVariable("Path","User")
 }
 
-Set-Location $ProjectRoot
-Write-Host "       项目根目录: $ProjectRoot"
+# ---- 辅助函数：检查命令是否存在 ----
+function Test-Cmd($name) {
+    return (Get-Command $name -ErrorAction SilentlyContinue) -ne $null
+}
+
+# ---- 辅助函数：如果不存在则用 winget 安装，安装后等待PATH生效 ----
+function Install-IfMissing($name, $wingetPkg, $displayName) {
+    if (Test-Cmd $name) {
+        Write-Host "       $displayName ✓ (已存在)" -ForegroundColor DarkGreen
+        return $true
+    }
+    Write-Host "       正在安装 $displayName..." -ForegroundColor Yellow
+    winget install $wingetPkg --accept-package-agreements --silent 2>&1 | Out-Null
+
+    # 安装后 PATH 可能不会立即生效，等一下再反复尝试
+    for ($retry = 0; $retry -lt 5; $retry++) {
+        Start-Sleep -Seconds 2
+        Refresh-Path
+        if (Test-Cmd $name) {
+            Write-Host "       $displayName ✓ (安装完成)" -ForegroundColor DarkGreen
+            return $true
+        }
+    }
+
+    # 5次都没刷出来，提示用户重启终端
+    Write-Host "       $displayName 已安装，但 PATH 未生效" -ForegroundColor Yellow
+    Write-Host "       请关闭此窗口，重新以管理员打开终端，再粘贴同一行命令" -ForegroundColor Yellow
+    Write-Host "       (第二次运行会直接跳过安装，秒进编译)" -ForegroundColor Yellow
+    return $false
+}
+
+# ---- 辅助函数：检测 Visual Studio (2019/2022/2025/2026/...) ----
+function Find-VS {
+    # vswhere.exe 是 VS 官方自带的定位工具，能查所有版本
+    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path $vswhere) {
+        # -latest 找最新版，-requires 确保装了 C++ 工作负载
+        $vsPath = & $vswhere -latest -requires Microsoft.VisualStudio.Workload.NativeDesktop -property installationPath 2>$null
+        if ($vsPath) {
+            return $vsPath
+        }
+    }
+    # 回退：vswhere 不存在或没返回，手动搜常见版本
+    $years = @(2026, 2025, 2022, 2019)
+    $editions = @("Community", "Professional", "Enterprise", "BuildTools")
+    foreach ($year in $years) {
+        foreach ($ed in $editions) {
+            $p = "${env:ProgramFiles}\Microsoft Visual Studio\$year\$ed"
+            if (Test-Path "$p\VC\Auxiliary\Build\vcvars64.bat") { return $p }
+            $p = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\$year\$ed"
+            if (Test-Path "$p\VC\Auxiliary\Build\vcvars64.bat") { return $p }
+        }
+    }
+    return $null
+}
 
 # =============================================================
-# 步骤1: 检查/安装 winget
+# 步骤1: 检查 winget
 # =============================================================
 Write-Host "[1/5] 检查包管理器 winget..." -ForegroundColor Green
-$winget = Get-Command winget -ErrorAction SilentlyContinue
-if (-not $winget) {
-    Write-Host "       winget 未安装，尝试通过 Microsoft Store 安装..." -ForegroundColor Yellow
-    Start-Process "ms-windows-store://pdp/?productid=9NBLGGH4NNS1"
-    Write-Host "       请在应用商店点击'安装'，完成后重新运行此脚本" -ForegroundColor Yellow
-    pause
-    exit 0
+if (-not (Test-Cmd winget)) {
+    Write-Host "       winget 未安装" -ForegroundColor Red
+    Write-Host "       请确保系统为 Windows 10 1809+ 或 Windows 11" -ForegroundColor Yellow
+    return
 }
 Write-Host "       winget ✓" -ForegroundColor DarkGreen
 
 # =============================================================
-# 步骤2: 检查/安装 CMake
+# 步骤2: 检查/安装 Git
 # =============================================================
-Write-Host "[2/5] 检查 CMake..." -ForegroundColor Green
-$cmake = Get-Command cmake -ErrorAction SilentlyContinue
-if (-not $cmake) {
-    Write-Host "       正在安装 CMake..." -ForegroundColor Yellow
-    winget install Kitware.CMake --accept-package-agreements --silent 2>&1 | Out-Null
+Write-Host "[2/5] 检查 Git..." -ForegroundColor Green
+if (-not (Install-IfMissing git Git.Git "Git")) {
+    Write-Host "       请关闭此窗口，重新以管理员身份打开终端，" -ForegroundColor Yellow
+    Write-Host "       再次粘贴同一行命令即可继续" -ForegroundColor Yellow
+    return
+}
 
-    # winget 安装后需要刷新 PATH
-    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-    $cmake = Get-Command cmake -ErrorAction SilentlyContinue
-    if (-not $cmake) {
-        Write-Host "       [错误] CMake 安装失败" -ForegroundColor Red
-        Write-Host "       请手动下载: https://cmake.org/download/" -ForegroundColor Yellow
-        pause
-        exit 1
+# =============================================================
+# 步骤3: 拉取代码
+# =============================================================
+Write-Host "[3/5] 拉取代码..." -ForegroundColor Green
+if (Test-Path $ProjectDir) {
+    Write-Host "       目录已存在，检查更新..."
+    Push-Location $ProjectDir
+    $remote = & git remote get-url origin 2>$null
+    if ($remote -ne $RepoUrl) {
+        Write-Host "       [注意] 仓库地址不匹配，使用本地已有代码" -ForegroundColor Yellow
+    } else {
+        & git pull --ff-only 2>&1 | Out-Null
+        Write-Host "       已更新到最新版本 ✓"
     }
-    Write-Host "       CMake 安装完成 ✓" -ForegroundColor DarkGreen
 } else {
-    Write-Host "       CMake ✓ ($($cmake.Source))" -ForegroundColor DarkGreen
+    Write-Host "       正在克隆仓库（约 20MB）..."
+    & git clone $RepoUrl $ProjectDir 2>&1
+    Push-Location $ProjectDir
+    Write-Host "       代码已拉取 ✓"
 }
 
+Write-Host "       代码目录: $ProjectDir" -ForegroundColor DarkGreen
+
 # =============================================================
-# 步骤3: 检查/安装 MinGW-w64 (GCC)
+# 步骤4: 检测 Visual Studio
 # =============================================================
-Write-Host "[3/5] 检查 GCC (MinGW-w64)..." -ForegroundColor Green
+Write-Host "[4/5] 检测 Visual Studio..." -ForegroundColor Green
 
-# 刷新 PATH，确保刚装的工具能找到
-$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+$vsPath = Find-VS
+if (-not $vsPath) {
+    Write-Host "       [错误] 未检测到 Visual Studio 2022" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "       请安装 Visual Studio 2022 社区版（免费）：" -ForegroundColor Yellow
+    Write-Host "       https://visualstudio.microsoft.com/zh-cn/downloads/" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "       安装时务必勾选「使用 C++ 的桌面开发」工作负载" -ForegroundColor Yellow
+    Write-Host "       安装完成后重新运行本脚本即可" -ForegroundColor Yellow
+    Pop-Location
+    return
+}
+Write-Host "       Visual Studio ✓" -ForegroundColor DarkGreen
+Write-Host "       路径: $vsPath" -ForegroundColor DarkGray
 
-$gcc = Get-Command gcc -ErrorAction SilentlyContinue
-if (-not $gcc) {
-    Write-Host "       正在安装 MinGW-w64..." -ForegroundColor Yellow
+# =============================================================
+# 步骤5: CMake 配置 + MSVC 编译 + 启动
+# =============================================================
+Write-Host "[5/5] 编译与启动..." -ForegroundColor Green
 
-    # 尝试安装
-    $result = winget install "MSYS2.UCRT64" --accept-package-agreements 2>&1
-    Write-Host "       $result"
-
-    # 刷新 PATH
-    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-
-    # 检查 MSYS2 安装路径
-    $mingwPaths = @(
-        "C:\msys64\ucrt64\bin",
-        "$env:ProgramFiles\msys64\ucrt64\bin",
-        "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\*MSYS2*\ucrt64\bin"
-    )
-
-    $found = $false
-    foreach ($p in $mingwPaths) {
-        $gccPath = Join-Path $p "gcc.exe"
-        if (Test-Path $gccPath) {
-            Write-Host "       找到 MinGW: $p" -ForegroundColor DarkGreen
-            $env:Path = "$p;$env:Path"
-            $found = $true
-            break
-        }
-    }
-
-    if (-not $found) {
-        Write-Host "       [备选] 通过 winget 安装独立 MinGW..." -ForegroundColor Yellow
-        winget install "GNU.MinGW-w64" --accept-package-agreements 2>&1 | Out-Null
-        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-    }
-
-    $gcc = Get-Command gcc -ErrorAction SilentlyContinue
-    if (-not $gcc) {
-        Write-Host "       [错误] MinGW 安装失败" -ForegroundColor Red
-        Write-Host "       手动安装: https://winlibs.com/ (选 UCRT, x86_64, posix)" -ForegroundColor Yellow
-        Write-Host "       下载后解压，把 bin/ 目录加入系统 PATH，然后重新运行" -ForegroundColor Yellow
-        pause
-        exit 1
-    }
-
-    Write-Host "       MinGW 安装完成 ✓" -ForegroundColor DarkGreen
-} else {
-    Write-Host "       GCC ✓ ($($gcc.Source))" -ForegroundColor DarkGreen
+# 用 VS 自带的 Developer PowerShell 环境变量来确保 MSVC 工具链可用
+$vcvars = "$vsPath\VC\Auxiliary\Build\vcvars64.bat"
+if (-not (Test-Path $vcvars)) {
+    Write-Host "       [错误] 找不到 vcvars64.bat，VS 安装可能不完整" -ForegroundColor Red
+    Write-Host "       请确保安装了「使用 C++ 的桌面开发」工作负载" -ForegroundColor Yellow
+    Pop-Location
+    return
 }
 
-# 验证 GCC 版本
-$gccVer = & gcc --version | Select-Object -First 1
-Write-Host "       $gccVer"
+# 调用 vcvars 设置 MSVC 环境，然后执行 cmake
+# 用 cmd /c 串联：先初始化 MSVC 环境变量，再在同一进程中跑 cmake + msbuild
+Write-Host "       初始化 MSVC 编译环境..."
+Write-Host "       CMake 配置 + MSBuild 编译中..."
 
-# =============================================================
-# 步骤4: 编译
-# =============================================================
-Write-Host "[4/5] 编译项目..." -ForegroundColor Green
+$buildDir = "$ProjectDir\build"
+$slnFile  = "$buildDir\EnchantedWarrior.sln"
 
-# 清理旧的 build
-if (Test-Path "$ProjectRoot\build") {
-    Remove-Item -Recurse -Force "$ProjectRoot\build"
-    Write-Host "       已清理旧的构建目录"
+$buildScript = @"
+@echo off
+call "$vcvars" >nul 2>&1
+cd /d "$ProjectDir"
+cmake -S . -B "$buildDir" -DBUILD_EXAMPLES=OFF >nul 2>&1
+if %errorlevel% neq 0 (
+    echo CMAKE_ERROR
+    exit /b 1
+)
+cmake --build "$buildDir" --config Debug -j %NUMBER_OF_PROCESSORS%
+if %errorlevel% neq 0 (
+    echo BUILD_ERROR
+    exit /b 1
+)
+echo BUILD_OK
+"@
+
+$buildBat = "$env:TEMP\ew_build.bat"
+Set-Content -Path $buildBat -Value $buildScript -Encoding ASCII
+
+$buildResult = & cmd /c $buildBat 2>&1
+Remove-Item $buildBat -Force -ErrorAction SilentlyContinue
+
+if ($buildResult -match "CMAKE_ERROR") {
+    Write-Host "       [错误] CMake 配置失败" -ForegroundColor Red
+    Pop-Location
+    return
 }
-
-# CMake 配置
-Write-Host "       CMake 配置中..."
-$cmakeOutput = & cmake -S $ProjectRoot -B "$ProjectRoot\build" -DBUILD_EXAMPLES=OFF -G "MinGW Makefiles" 2>&1
-if ($LASTEXITCODE -ne 0) {
-    # 回退到默认生成器
-    Write-Host "       MinGW Makefiles 失败，尝试默认生成器..."
-    $cmakeOutput = & cmake -S $ProjectRoot -B "$ProjectRoot\build" -DBUILD_EXAMPLES=OFF 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "[错误] CMake 配置失败:" -ForegroundColor Red
-        Write-Host $cmakeOutput
-        pause
-        exit 1
-    }
-}
-
-# 编译
-Write-Host "       编译中..."
-$procCount = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
-& cmake --build "$ProjectRoot\build" -j $procCount 2>&1
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "[错误] 编译失败" -ForegroundColor Red
-    pause
-    exit 1
+if ($buildResult -match "BUILD_ERROR") {
+    Write-Host "       [错误] MSBuild 编译失败" -ForegroundColor Red
+    Write-Host $buildResult
+    Pop-Location
+    return
 }
 
 Write-Host "       编译成功 ✓" -ForegroundColor DarkGreen
 
 # =============================================================
-# 步骤5: 启动
+# 打印路径汇总
 # =============================================================
-Write-Host "[5/5] 启动游戏..." -ForegroundColor Green
+$exe = "$buildDir\Debug\EnchantedWarrior.exe"
 
-$exePath = "$ProjectRoot\build\EnchantedWarrior.exe"
-if (Test-Path $exePath) {
-    Write-Host "       运行: $exePath" -ForegroundColor DarkGreen
-    Start-Process $exePath
+Write-Host ""
+Write-Host "============================================" -ForegroundColor Cyan
+Write-Host "  全部完成！" -ForegroundColor Cyan
+Write-Host "============================================" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "  代码目录:" -ForegroundColor White
+Write-Host "    $ProjectDir" -ForegroundColor Yellow
+Write-Host ""
+Write-Host "  Visual Studio 解决方案:" -ForegroundColor White
+Write-Host "    $slnFile" -ForegroundColor Yellow
+Write-Host "    --> 双击此文件即可用 Visual Studio 打开整个项目" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "  游戏程序:" -ForegroundColor White
+Write-Host "    $exe" -ForegroundColor Yellow
+Write-Host "    --> 双击启动游戏" -ForegroundColor DarkGray
+Write-Host ""
+
+# 打开 .sln 所在文件夹，选中 .sln 文件
+if (Test-Path $slnFile) {
+    Write-Host "  正在打开解决方案所在文件夹..." -ForegroundColor Green
+    & explorer.exe /select,"$slnFile"
 } else {
-    Write-Host "[错误] 找不到可执行文件: $exePath" -ForegroundColor Red
-    pause
-    exit 1
+    & explorer.exe $ProjectDir
 }
 
 Write-Host ""
-Write-Host "游戏已启动！" -ForegroundColor Cyan
+
+# =============================================================
+# 询问是否启动游戏
+# =============================================================
+$runGame = Read-Host "是否现在启动游戏？(y/n)"
+if ($runGame -eq "y" -or $runGame -eq "Y") {
+    if (Test-Path $exe) {
+        Write-Host "       启动游戏..." -ForegroundColor Green
+        Start-Process $exe
+        Write-Host "       游戏已启动！" -ForegroundColor Cyan
+    } else {
+        Write-Host "       [错误] 找不到可执行文件: $exe" -ForegroundColor Red
+    }
+} else {
+    Write-Host "       跳过启动" -ForegroundColor DarkGray
+}
+
+Pop-Location
+
 Write-Host ""
-pause
+Write-Host "============================================" -ForegroundColor Cyan
+Write-Host "  下次使用：" -ForegroundColor White
+Write-Host ""
+Write-Host "    Visual Studio 打开项目:" -ForegroundColor DarkGray
+Write-Host "      双击 $slnFile" -ForegroundColor Yellow
+Write-Host ""
+Write-Host "    直接运行游戏:" -ForegroundColor DarkGray
+Write-Host "      $exe" -ForegroundColor Yellow
+Write-Host ""
+Write-Host "    在 VS 中修改代码后重新编译:" -ForegroundColor DarkGray
+Write-Host "      Visual Studio 菜单 -> 生成 -> 生成解决方案 (Ctrl+Shift+B)" -ForegroundColor Yellow
+Write-Host ""
+Write-Host "    拉取最新代码:" -ForegroundColor DarkGray
+Write-Host "      cd $ProjectDir" -ForegroundColor Yellow
+Write-Host "      git pull" -ForegroundColor Yellow
+Write-Host "      然后打开 .sln 重新生成" -ForegroundColor Yellow
+Write-Host "============================================" -ForegroundColor Cyan
+Write-Host ""
