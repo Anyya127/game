@@ -1,0 +1,14 @@
+build/
+x64/
+.vs/
+*.vcxproj*
+*.slnx
+*.user
+枯羽与残火/
+*.pdb
+*.ilk
+*.exe
+*.obj
+*.idb
+*.tlog/
+*.recipe
