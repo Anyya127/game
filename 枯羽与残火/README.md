@@ -4,15 +4,18 @@
 
 ## 一键启动（队友）
 
-### 如果你已经安装了 Git
+### 一键启动（无需提前安装任何工具）
 
-Win+X → 终端(管理员)，粘贴以下三行（一行一行回车）：
+Win+X → 终端(管理员)，粘贴以下命令（一行一行回车）：
 
 ```powershell
-git clone https://gitee.com/Anyya__127/game.git $env:USERPROFILE\枯羽与残火
+Invoke-WebRequest -Uri "https://gitee.com/Anyya__127/game/repository/archive/main.zip" -OutFile "$env:TEMP\game.zip"
+Expand-Archive "$env:TEMP\game.zip" -DestinationPath "$env:USERPROFILE" -Force
 cd $env:USERPROFILE\枯羽与残火
 powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
 ```
+
+所有命令都是 PowerShell 自带的，不需要提前装 Git。setup.ps1 会自动检测/安装 Git 和 Visual Studio。
 
 ### 如果你还没装 Git
 
